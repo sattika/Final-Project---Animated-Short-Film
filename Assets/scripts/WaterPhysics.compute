@@ -1,0 +1,161 @@
+#pragma kernel buildTriangle
+#pragma kernel calculateFlow
+#pragma kernel calculateHeight
+#pragma kernel updatePos
+
+int _gridResolution;
+float _gridStep;
+float _gridOffset;
+float _deltaTime;
+
+float _cellPipeLength;
+float _gravityConstant;
+float _pipeCrossSectionArea;
+float _fluidDensity;
+float _dampingFactor;
+
+RWStructuredBuffer<int> _triangleBuffer;
+RWStructuredBuffer<float3> _positionBuffer;
+RWStructuredBuffer<float> _heightBuffer;
+RWStructuredBuffer<float> _externalPressureBuffer;
+RWStructuredBuffer<float> _volumeBuffer;
+RWStructuredBuffer<float> _flowsBuffer;
+
+[numthreads(8, 8, 1)]
+void buildTriangle(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < (uint)_gridResolution - 1 && id.y < (uint)_gridResolution - 1)
+    {
+        int vertexIndex = (id.y * _gridResolution) + id.x;
+        int quadIndex = ((id.y * (_gridResolution - 1)) + id.x) * 6;
+        
+        int topRight = vertexIndex + 1;
+        int bottomLeft = vertexIndex + _gridResolution;
+        int bottomRight = vertexIndex + _gridResolution + 1;
+        
+        _triangleBuffer[quadIndex] = vertexIndex;
+        _triangleBuffer[quadIndex + 1] = bottomLeft;
+        _triangleBuffer[quadIndex + 2] = topRight;
+
+        _triangleBuffer[quadIndex + 3] = bottomRight;
+        _triangleBuffer[quadIndex + 4] = topRight;
+        _triangleBuffer[quadIndex + 5] = bottomLeft;
+    }
+}
+
+[numthreads(8, 8, 1)]
+void calculateFlow(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_gridResolution || id.y >= (uint)_gridResolution) return;
+
+    int index = id.y * _gridResolution + id.x;
+    float currentHeight = _heightBuffer[index];
+    float currentPressure = _externalPressureBuffer[index];
+
+    int2 neighbors[8] = { 
+        int2(-1, 0),
+        int2(1, 0),
+        int2(0, -1),
+        int2(0, 1),
+        int2(-1, -1),
+        int2(1, 1),
+        int2(1, -1),
+        int2(-1, 1)
+    };
+    
+    for (int i = 0; i < 8; i++)
+    {
+        int neighborX = id.x + neighbors[i].x;
+        int neighborY = id.y + neighbors[i].y;
+        int flowIndex = index * 8 + i;
+        
+        if (neighborX >= 0 && neighborX < _gridResolution && neighborY >= 0 && neighborY < _gridResolution)
+        {
+            int neighborIndex = neighborY * _gridResolution + neighborX;
+            
+            float neighborHeight = _heightBuffer[neighborIndex];
+            float neighborPressure = _externalPressureBuffer[neighborIndex];
+            
+            float heightDifference = currentHeight - neighborHeight;
+            float pressureDifference = (_fluidDensity * _gravityConstant * heightDifference) + (currentPressure - neighborPressure);
+            
+            float effectiveLength = (i >= 4) ? (_cellPipeLength * 1.41421356f) : _cellPipeLength;
+            
+            float acceleration = (_pipeCrossSectionArea * pressureDifference) / (_fluidDensity * effectiveLength);
+            
+            float updatedFlow = (_flowsBuffer[flowIndex] + acceleration * _deltaTime) * _dampingFactor;
+            
+            _flowsBuffer[flowIndex] = max(0.0f, updatedFlow);
+        }
+        else
+        {
+            _flowsBuffer[flowIndex] = 0.0f;
+        }
+    }
+}
+
+[numthreads(8, 8, 1)]
+void calculateHeight(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_gridResolution || id.y >= (uint)_gridResolution) return;
+
+    int index = id.y * _gridResolution + id.x;
+    float totalFlowOut = 0.0f;
+    float totalFlowIn = 0.0f;
+
+    int2 neighbors[8] = { 
+        int2(-1, 0),
+        int2(1, 0),
+        int2(0, -1),
+        int2(0, 1),
+        int2(-1, -1),
+        int2(1, 1),
+        int2(1, -1),
+        int2(-1, 1)
+    };
+    
+    for (int i = 0; i < 8; i++)
+    {
+        totalFlowOut += _flowsBuffer[index * 8 + i];
+    }
+
+    float availableVolume = _volumeBuffer[index];
+    float maxOutflow = totalFlowOut * _deltaTime;
+    float outflowScale = (maxOutflow > availableVolume && maxOutflow > 0.00001f) ? (availableVolume / maxOutflow) : 1.0f;
+
+    for (int i = 0; i < 8; i++)
+    {
+        int neighborX = id.x + neighbors[i].x;
+        int neighborY = id.y + neighbors[i].y;
+        
+        if (neighborX >= 0 && neighborX < _gridResolution && neighborY >= 0 && neighborY < _gridResolution)
+        {
+            int neighborIndex = neighborY * _gridResolution + neighborX;
+            
+            int oppositeDirection = i ^ 1; 
+            totalFlowIn += _flowsBuffer[neighborIndex * 8 + oppositeDirection];
+        }
+    }
+
+    float netFlow = totalFlowIn - (totalFlowOut * outflowScale);
+    float updatedVolume = availableVolume + (netFlow * _deltaTime);
+    
+    if (updatedVolume < 0.0f) updatedVolume = 0.0f;
+    _volumeBuffer[index] = updatedVolume;
+    
+    _heightBuffer[index] = updatedVolume / (_cellPipeLength * _cellPipeLength);
+}
+
+[numthreads(8, 8, 1)]
+void updatePos(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < (uint)_gridResolution && id.y < (uint)_gridResolution)
+    {
+        int index = (id.y * _gridResolution) + id.x;
+        
+        float xPosition = (id.x * _gridStep) - _gridOffset;
+        float zPosition = (id.y * _gridStep) - _gridOffset;
+        
+        _positionBuffer[index] = float3(xPosition, _heightBuffer[index], zPosition);
+    }
+}

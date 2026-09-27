@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: ce7293eceffab354eae316c2a91315bb
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - computeShader: {fileID: 7200000, guid: 7d23d1e8c3e172e40aa78faacb7f1d2c, type: 3}
+  - puddleMaterial: {fileID: 10302, guid: 0000000000000000f000000000000000, type: 0}
+  - puddleMesh: {fileID: 10207, guid: 0000000000000000e000000000000000, type: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
